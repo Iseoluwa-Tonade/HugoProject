@@ -1,8 +1,10 @@
 streamlit
 openai
-PyPDF2
-python-pptx
-python-docx
 langchain
 langchain-openai
+langchain-community
 faiss-cpu
+pypdf
+python-pptx
+docx2txt
+unstructured
