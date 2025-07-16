@@ -9,3 +9,5 @@ python-pptx
 docx2txt
 unstructured
 sentence-transformers
+pinecone-client
+langchain-pinecone
