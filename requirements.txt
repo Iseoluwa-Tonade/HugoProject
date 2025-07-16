@@ -1,11 +1,10 @@
 streamlit
 openai
 langchain
+langchain-openai
 langchain-community
-langchain-huggingface
 faiss-cpu
 pypdf
 python-pptx
 docx2txt
 unstructured
-sentence-transformers
