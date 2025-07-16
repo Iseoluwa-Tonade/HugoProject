@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Query Your Files</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <h1>Upload Your Files and Ask a Question</h1>
+        <form id="upload-form" enctype="multipart/form-data">
+            <div class="form-group">
+                <label for="files">Select up to 30 files:</label>
+                <input type="file" id="files" name="files" multiple>
+            </div>
+            <div class="form-group">
+                <label for="question">Your Question:</label>
+                <input type="text" id="question" name="question" required>
+            </div>
+            <button type="submit">Ask</button>
+        </form>
+        <div id="response" class="response-container"></div>
+    </div>
+    <script src="script.js"></script>
+</body>
+</html>
