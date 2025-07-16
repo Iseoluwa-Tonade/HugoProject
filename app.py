@@ -1,5 +1,5 @@
-from flask import Flask, request, jsonify
 import os
+from flask import Flask, request, jsonify, send_from_directory
 import google.generativeai as genai
 from PyPDF2 import PdfReader
 from pptx import Presentation
@@ -11,10 +11,7 @@ app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-# IMPORTANT: Replace with your own Gemini API key
-# You can get one from https://makersuite.google.com/
-# NEW
-import os
+# Use an environment variable for the API key
 genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
 model = genai.GenerativeModel('gemini-pro')
 
@@ -78,8 +75,6 @@ def query_files():
     
     question = data['question']
     
-    # For simplicity, we'll just use the first uploaded file.
-    # A more robust solution would combine text from all files.
     uploaded_files = os.listdir(app.config['UPLOAD_FOLDER'])
     if not uploaded_files:
         return jsonify({'error': 'No files uploaded'}), 400
@@ -96,5 +91,14 @@ def query_files():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+# Routes to serve the frontend files
+@app.route('/')
+def serve_index():
+    return send_from_directory('.', 'index.html')
+
+@app.route('/<path:filename>')
+def serve_static(filename):
+    return send_from_directory('.', filename)
+
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.run()
