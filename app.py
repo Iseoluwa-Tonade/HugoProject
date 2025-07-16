@@ -45,7 +45,7 @@ if not all([OPENAI_API_KEY, TAVILY_API_KEY]):
 
 # Initialize models and embeddings
 try:
-    llm = ChatOpenAI(api_key=OPENAI_API_KEY, model="gpt-4o")
+    llm = ChatOpenAI(api_key=OPENAI_API_KEY, model="gpt-4o", temperature=0)
     embeddings = OpenAIEmbeddings(api_key=OPENAI_API_KEY)
 except Exception as e:
     st.error(f"Failed to initialize OpenAI components: {e}")
@@ -109,8 +109,13 @@ st.session_state.agent_executor = AgentExecutor(agent=agent, tools=tools, verbos
 # --- CHAT INTERFACE ---
 # Display previous chat messages
 for message in st.session_state.chat_history:
-    with st.chat_message(message.role):
-        st.markdown(message.content)
+    # Check the type of the message to determine the role
+    if isinstance(message, HumanMessage):
+        with st.chat_message("user"):
+            st.markdown(message.content)
+    else: # Assumes the other type is AIMessage
+        with st.chat_message("assistant"):
+            st.markdown(message.content)
 
 # Accept user input
 if user_prompt := st.chat_input("Ask a question..."):
