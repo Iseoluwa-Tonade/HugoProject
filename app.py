@@ -3,28 +3,34 @@ from openai import OpenAI
 import os
 import tempfile
 
-# Import LangChain components
+# Import LangChain components for the Agent
 from langchain_community.document_loaders import PyPDFLoader, Docx2txtLoader, UnstructuredPowerPointLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from langchain_community.vectorstores import FAISS
-from langchain.chains.combine_documents import create_stuff_documents_chain
-from langchain.chains import create_retrieval_chain
-from langchain_core.prompts import ChatPromptTemplate
+from langchain.tools.retriever import create_retriever_tool
+from langchain_community.tools.tavily_search import TavilySearchResults
+from langchain import hub
+from langchain.agents import create_openai_tools_agent, AgentExecutor
+from langchain_core.messages import HumanMessage, AIMessage
 
 # --- Streamlit App UI and Logic ---
 
-st.set_page_config(page_title="Query Your Docs with RAG", page_icon="🧠")
-st.title("🧠 Query Your Documents with RAG")
+st.set_page_config(page_title="AI Research Assistant", page_icon="🤖")
+st.title("🤖 AI Research Assistant")
 
-# Sidebar for API Key and file uploads
+# --- Configuration ---
 with st.sidebar:
     st.header("Configuration")
     try:
-        api_key = st.secrets["OPENAI_API_KEY"]
-        st.success("API key loaded from secrets!")
+        # Load secrets for deployment
+        OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"]
+        TAVILY_API_KEY = st.secrets["TAVILY_API_KEY"]
+        st.success("API keys loaded!")
     except:
-        api_key = st.text_input("Enter your OpenAI API Key:", type="password")
+        # Fallback for local testing
+        OPENAI_API_KEY = st.text_input("Enter your OpenAI API Key:", type="password")
+        TAVILY_API_KEY = st.text_input("Enter your Tavily API Key:", type="password")
 
     uploaded_files = st.file_uploader(
         "Upload your documents (PDF, DOCX, PPTX)",
@@ -32,27 +38,31 @@ with st.sidebar:
         accept_multiple_files=True
     )
 
-# Main app logic
-if not api_key:
-    st.warning("Please enter your OpenAI API Key in the sidebar to proceed.")
+# --- Main App Logic ---
+if not all([OPENAI_API_KEY, TAVILY_API_KEY]):
+    st.warning("Please provide all required API keys in the sidebar.")
     st.stop()
 
-# Initialize LangChain components
+# Initialize models and embeddings
 try:
-    llm = ChatOpenAI(api_key=api_key, model="gpt-4o")
-    embeddings = OpenAIEmbeddings(api_key=api_key)
+    llm = ChatOpenAI(api_key=OPENAI_API_KEY, model="gpt-4o")
+    embeddings = OpenAIEmbeddings(api_key=OPENAI_API_KEY)
 except Exception as e:
     st.error(f"Failed to initialize OpenAI components: {e}")
     st.stop()
-
-# Store the vector store in session state
+    
+# Initialize session state variables
 if "vector_store" not in st.session_state:
     st.session_state.vector_store = None
+if "chat_history" not in st.session_state:
+    st.session_state.chat_history = []
+if "agent_executor" not in st.session_state:
+    st.session_state.agent_executor = None
 
+# Process documents and create the document search tool
 if uploaded_files:
     if st.button("Process Documents"):
-        with st.spinner("Processing documents... this may take a moment."):
-            # Create a temporary directory to store uploaded files
+        with st.spinner("Processing documents..."):
             with tempfile.TemporaryDirectory() as temp_dir:
                 docs = []
                 for uploaded_file in uploaded_files:
@@ -60,8 +70,6 @@ if uploaded_files:
                     with open(temp_filepath, "wb") as f:
                         f.write(uploaded_file.getvalue())
                     
-                    st.info(f"Loading {uploaded_file.name}...")
-                    # Use appropriate loader based on file type
                     if temp_filepath.endswith('.pdf'):
                         loader = PyPDFLoader(temp_filepath)
                     elif temp_filepath.endswith('.docx'):
@@ -71,58 +79,58 @@ if uploaded_files:
                     
                     docs.extend(loader.load())
 
-            # 1. Split documents into chunks
             text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
             splits = text_splitter.split_documents(docs)
-
-            # 2. Create vector store from chunks
             st.session_state.vector_store = FAISS.from_documents(splits, embeddings)
-            st.success("Documents processed successfully! You can now ask questions.")
+            st.success("Documents processed! The agent is now ready.")
 
+# --- AGENT AND TOOLS SETUP ---
+# Define the tools the agent can use
+internet_search_tool = TavilySearchResults(max_results=3, tavily_api_key=TAVILY_API_KEY)
+tools = [internet_search_tool]
 
-# Initialize chat history
-if "messages" not in st.session_state:
-    st.session_state.messages = []
+# Create the document retriever tool only if documents have been processed
+if st.session_state.vector_store:
+    retriever = st.session_state.vector_store.as_retriever()
+    document_retriever_tool = create_retriever_tool(
+        retriever,
+        "document_search",
+        "Search for information within the user's uploaded documents. Use this for specific questions about the provided files."
+    )
+    tools.append(document_retriever_tool)
 
-# Display chat messages
-for message in st.session_state.messages:
-    with st.chat_message(message["role"]):
-        st.markdown(message["content"])
+# Get the prompt for the agent
+prompt = hub.pull("hwchase17/openai-tools-agent")
+
+# Create the agent and the executor that runs it
+agent = create_openai_tools_agent(llm, tools, prompt)
+st.session_state.agent_executor = AgentExecutor(agent=agent, tools=tools, verbose=True)
+
+# --- CHAT INTERFACE ---
+# Display previous chat messages
+for message in st.session_state.chat_history:
+    with st.chat_message(message.role):
+        st.markdown(message.content)
 
 # Accept user input
-if prompt := st.chat_input("Ask a question about your documents"):
-    st.session_state.messages.append({"role": "user", "content": prompt})
+if user_prompt := st.chat_input("Ask a question..."):
     with st.chat_message("user"):
-        st.markdown(prompt)
+        st.markdown(user_prompt)
 
-    if st.session_state.vector_store is None:
-        st.warning("Please upload and process documents before asking a question.")
-    else:
-        with st.chat_message("assistant"):
-            with st.spinner("Thinking..."):
-                try:
-                    # 3. Create a retrieval chain to answer questions
-                    retriever = st.session_state.vector_store.as_retriever()
-                    
-                    prompt_template = ChatPromptTemplate.from_template(
-                        """Answer the user's question based only on the following context:
-                        
-                        <context>
-                        {context}
-                        </context>
-                        
-                        Question: {input}"""
-                    )
-                    
-                    document_chain = create_stuff_documents_chain(llm, prompt_template)
-                    retrieval_chain = create_retrieval_chain(retriever, document_chain)
-                    
-                    # 4. Invoke the chain with the user's question
-                    response = retrieval_chain.invoke({"input": prompt})
-                    response_text = response["answer"]
-
-                except Exception as e:
-                    response_text = f"An error occurred: {e}"
-
+    with st.chat_message("assistant"):
+        with st.spinner("Thinking..."):
+            try:
+                # Invoke the agent with the user's question and chat history
+                response = st.session_state.agent_executor.invoke({
+                    "chat_history": st.session_state.chat_history,
+                    "input": user_prompt
+                })
+                response_text = response["output"]
                 st.markdown(response_text)
-        st.session_state.messages.append({"role": "assistant", "content": response_text})
+            except Exception as e:
+                response_text = f"An error occurred: {e}"
+                st.error(response_text)
+    
+    # Update chat history
+    st.session_state.chat_history.append(HumanMessage(content=user_prompt))
+    st.session_state.chat_history.append(AIMessage(content=response_text))
