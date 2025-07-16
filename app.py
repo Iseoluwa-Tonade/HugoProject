@@ -1,71 +1,29 @@
 import streamlit as st
-from openai import OpenAI # <-- CHANGE: Import OpenAI
+from openai import OpenAI
 import os
-from PyPDF2 import PdfReader
-from pptx import Presentation
-from docx import Document
 import tempfile
 
-# --- Core Functions for Text Extraction (No changes here) ---
-
-def extract_text_from_pdf(filepath):
-    text = ""
-    with open(filepath, 'rb') as f:
-        reader = PdfReader(f)
-        for page in reader.pages:
-            text += page.extract_text() or ""
-    return text
-
-def extract_text_from_pptx(filepath):
-    text = ""
-    prs = Presentation(filepath)
-    for slide in prs.slides:
-        for shape in slide.shapes:
-            if hasattr(shape, "text"):
-                text += shape.text + "\n"
-    return text
-
-def extract_text_from_docx(filepath):
-    text = ""
-    doc = Document(filepath)
-    for para in doc.paragraphs:
-        text += para.text + "\n"
-    return text
-
-def process_uploaded_files(uploaded_files):
-    combined_text = ""
-    for uploaded_file in uploaded_files:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(uploaded_file.name)[1]) as tmp_file:
-            tmp_file.write(uploaded_file.getvalue())
-            tmp_filepath = tmp_file.name
-
-        st.info(f"Processing {uploaded_file.name}...")
-        try:
-            if tmp_filepath.endswith('.pdf'):
-                combined_text += extract_text_from_pdf(tmp_filepath) + "\n\n"
-            elif tmp_filepath.endswith('.pptx'):
-                combined_text += extract_text_from_pptx(tmp_filepath) + "\n\n"
-            elif tmp_filepath.endswith('.docx'):
-                combined_text += extract_text_from_docx(tmp_filepath) + "\n\n"
-        finally:
-            os.remove(tmp_filepath)
-
-    return combined_text
+# Import LangChain components
+from langchain_community.document_loaders import PyPDFLoader, Docx2txtLoader, UnstructuredPowerPointLoader
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_openai import OpenAIEmbeddings, ChatOpenAI
+from langchain_community.vectorstores import FAISS
+from langchain.chains.combine_documents import create_stuff_documents_chain
+from langchain.chains import create_retrieval_chain
+from langchain_core.prompts import ChatPromptTemplate
 
 # --- Streamlit App UI and Logic ---
 
-st.set_page_config(page_title="Query Your Docs", page_icon="📄")
-st.title("📄 Query Your Documents")
+st.set_page_config(page_title="Query Your Docs with RAG", page_icon="🧠")
+st.title("🧠 Query Your Documents with RAG")
 
 # Sidebar for API Key and file uploads
 with st.sidebar:
     st.header("Configuration")
     try:
-        # <-- CHANGE: Use OpenAI API Key from secrets
         api_key = st.secrets["OPENAI_API_KEY"]
         st.success("API key loaded from secrets!")
     except:
-        # <-- CHANGE: Update text for OpenAI
         api_key = st.text_input("Enter your OpenAI API Key:", type="password")
 
     uploaded_files = st.file_uploader(
@@ -79,28 +37,54 @@ if not api_key:
     st.warning("Please enter your OpenAI API Key in the sidebar to proceed.")
     st.stop()
 
-# <-- CHANGE: Initialize OpenAI client
+# Initialize LangChain components
 try:
-    client = OpenAI(api_key=api_key)
+    llm = ChatOpenAI(api_key=api_key, model="gpt-4o")
+    embeddings = OpenAIEmbeddings(api_key=api_key)
 except Exception as e:
-    st.error(f"Failed to initialize OpenAI client: {e}")
+    st.error(f"Failed to initialize OpenAI components: {e}")
     st.stop()
 
-# Process files only once and store in session state
-if "processed_text" not in st.session_state:
-    st.session_state.processed_text = None
+# Store the vector store in session state
+if "vector_store" not in st.session_state:
+    st.session_state.vector_store = None
 
 if uploaded_files:
     if st.button("Process Documents"):
         with st.spinner("Processing documents... this may take a moment."):
-            st.session_state.processed_text = process_uploaded_files(uploaded_files)
-        st.success("Documents processed successfully! You can now ask questions.")
+            # Create a temporary directory to store uploaded files
+            with tempfile.TemporaryDirectory() as temp_dir:
+                docs = []
+                for uploaded_file in uploaded_files:
+                    temp_filepath = os.path.join(temp_dir, uploaded_file.name)
+                    with open(temp_filepath, "wb") as f:
+                        f.write(uploaded_file.getvalue())
+                    
+                    st.info(f"Loading {uploaded_file.name}...")
+                    # Use appropriate loader based on file type
+                    if temp_filepath.endswith('.pdf'):
+                        loader = PyPDFLoader(temp_filepath)
+                    elif temp_filepath.endswith('.docx'):
+                        loader = Docx2txtLoader(temp_filepath)
+                    elif temp_filepath.endswith('.pptx'):
+                        loader = UnstructuredPowerPointLoader(temp_filepath)
+                    
+                    docs.extend(loader.load())
+
+            # 1. Split documents into chunks
+            text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+            splits = text_splitter.split_documents(docs)
+
+            # 2. Create vector store from chunks
+            st.session_state.vector_store = FAISS.from_documents(splits, embeddings)
+            st.success("Documents processed successfully! You can now ask questions.")
+
 
 # Initialize chat history
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# Display chat messages from history
+# Display chat messages
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
@@ -111,38 +95,34 @@ if prompt := st.chat_input("Ask a question about your documents"):
     with st.chat_message("user"):
         st.markdown(prompt)
 
-    if st.session_state.processed_text is None:
+    if st.session_state.vector_store is None:
         st.warning("Please upload and process documents before asking a question.")
     else:
         with st.chat_message("assistant"):
             with st.spinner("Thinking..."):
-                # <-- CHANGE: Structure the prompt and call the OpenAI API
                 try:
-                    # Construct the messages list for OpenAI
-                    messages = [
-                        {"role": "system", "content": "You are a helpful assistant that answers questions based on the provided document text."},
-                        {"role": "user", "content": f"""
-                            Based on the following text extracted from the user's documents, please answer their question.
-                            If the answer is not found in the text, state that clearly.
-
-                            ---
-                            DOCUMENT TEXT:
-                            {st.session_state.processed_text}
-                            ---
-
-                            USER'S QUESTION:
-                            {prompt}
-                        """}
-                    ]
-
-                    # Call the OpenAI API
-                    response = client.chat.completions.create(
-                        model="gpt-4o",  # Or "gpt-3.5-turbo"
-                        messages=messages
+                    # 3. Create a retrieval chain to answer questions
+                    retriever = st.session_state.vector_store.as_retriever()
+                    
+                    prompt_template = ChatPromptTemplate.from_template(
+                        """Answer the user's question based only on the following context:
+                        
+                        <context>
+                        {context}
+                        </context>
+                        
+                        Question: {input}"""
                     )
-                    response_text = response.choices[0].message.content
+                    
+                    document_chain = create_stuff_documents_chain(llm, prompt_template)
+                    retrieval_chain = create_retrieval_chain(retriever, document_chain)
+                    
+                    # 4. Invoke the chain with the user's question
+                    response = retrieval_chain.invoke({"input": prompt})
+                    response_text = response["answer"]
+
                 except Exception as e:
-                    response_text = f"An error occurred with the OpenAI API: {e}"
+                    response_text = f"An error occurred: {e}"
 
                 st.markdown(response_text)
         st.session_state.messages.append({"role": "assistant", "content": response_text})
