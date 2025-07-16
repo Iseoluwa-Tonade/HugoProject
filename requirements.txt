@@ -8,3 +8,4 @@ pypdf
 python-pptx
 docx2txt
 unstructured
+sentence-transformers
