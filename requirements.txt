@@ -3,3 +3,6 @@ openai
 PyPDF2
 python-pptx
 python-docx
+langchain
+langchain-openai
+faiss-cpu
