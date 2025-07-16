@@ -8,3 +8,5 @@ pypdf
 python-pptx
 docx2txt
 unstructured
+langchainhub
+tavily-python
