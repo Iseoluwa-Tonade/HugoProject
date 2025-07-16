@@ -1,26 +1,19 @@
-import os
-from flask import Flask, request, jsonify, send_from_directory
+import streamlit as st
 import google.generativeai as genai
+import os
 from PyPDF2 import PdfReader
 from pptx import Presentation
 from docx import Document
+import tempfile
 
-app = Flask(__name__)
-UPLOAD_FOLDER = 'uploads'
-app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
-
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-
-# Use an environment variable for the API key
-genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
-model = genai.GenerativeModel('gemini-pro')
+# --- Core Functions for Text Extraction ---
 
 def extract_text_from_pdf(filepath):
     text = ""
     with open(filepath, 'rb') as f:
         reader = PdfReader(f)
         for page in reader.pages:
-            text += page.extract_text()
+            text += page.extract_text() or ""
     return text
 
 def extract_text_from_pptx(filepath):
@@ -39,66 +32,118 @@ def extract_text_from_docx(filepath):
         text += para.text + "\n"
     return text
 
-def extract_text_from_file(filepath):
-    if filepath.endswith('.pdf'):
-        return extract_text_from_pdf(filepath)
-    elif filepath.endswith('.pptx'):
-        return extract_text_from_pptx(filepath)
-    elif filepath.endswith('.docx'):
-        return extract_text_from_docx(filepath)
-    else:
-        return ""
+def process_uploaded_files(uploaded_files):
+    """
+    Saves uploaded files temporarily, extracts text, and returns the combined text.
+    """
+    combined_text = ""
+    for uploaded_file in uploaded_files:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(uploaded_file.name)[1]) as tmp_file:
+            tmp_file.write(uploaded_file.getvalue())
+            tmp_filepath = tmp_file.name
 
-@app.route('/upload', methods=['POST'])
-def upload_files():
-    if 'files' not in request.files:
-        return jsonify({'error': 'No files part in the request'}), 400
-    files = request.files.getlist('files')
-    if not files:
-        return jsonify({'error': 'No files selected for uploading'}), 400
-    
-    filepaths = []
-    for file in files:
-        if file:
-            filename = file.filename
-            filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-            file.save(filepath)
-            filepaths.append(filepath)
-            
-    return jsonify({'message': 'Files successfully uploaded', 'filepaths': filepaths})
+        st.info(f"Processing {uploaded_file.name}...")
+        try:
+            if tmp_filepath.endswith('.pdf'):
+                combined_text += extract_text_from_pdf(tmp_filepath) + "\n\n"
+            elif tmp_filepath.endswith('.pptx'):
+                combined_text += extract_text_from_pptx(tmp_filepath) + "\n\n"
+            elif tmp_filepath.endswith('.docx'):
+                combined_text += extract_text_from_docx(tmp_filepath) + "\n\n"
+            # Add other file types here if needed
+        finally:
+            os.remove(tmp_filepath) # Clean up the temporary file
 
-@app.route('/query', methods=['POST'])
-def query_files():
-    data = request.get_json()
-    if not data or 'question' not in data:
-        return jsonify({'error': 'No question provided'}), 400
-    
-    question = data['question']
-    
-    uploaded_files = os.listdir(app.config['UPLOAD_FOLDER'])
-    if not uploaded_files:
-        return jsonify({'error': 'No files uploaded'}), 400
-        
-    latest_file = max([os.path.join(app.config['UPLOAD_FOLDER'], f) for f in uploaded_files], key=os.path.getctime)
-    
+    return combined_text
+
+# --- Streamlit App UI and Logic ---
+
+st.set_page_config(page_title="Query Your Docs", page_icon="📄")
+st.title("📄 Query Your Documents")
+
+# Sidebar for API Key and file uploads
+with st.sidebar:
+    st.header("Configuration")
+    # For local testing, users can paste their key. For deployment, use st.secrets.
     try:
-        text = extract_text_from_file(latest_file)
-        if not text:
-            return jsonify({'answer': 'Could not extract text from the file.'})
-            
-        response = model.generate_content(f"Based on the following text, answer the question: '{question}'\n\nText: {text}")
-        return jsonify({'answer': response.text})
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        # Try to get the key from Streamlit's secrets management
+        api_key = st.secrets["GEMINI_API_KEY"]
+        st.success("API key loaded from secrets!")
+    except:
+        # Fallback to a text input if secrets are not found
+        api_key = st.text_input("Enter your Gemini API Key:", type="password")
 
-# Routes to serve the frontend files
-@app.route('/')
-def serve_index():
-    return send_from_directory('.', 'index.html')
+    uploaded_files = st.file_uploader(
+        "Upload your documents (PDF, DOCX, PPTX)",
+        type=['pdf', 'docx', 'pptx'],
+        accept_multiple_files=True
+    )
 
-@app.route('/<path:filename>')
-def serve_static(filename):
-    return send_from_directory('.', filename)
+# Main app logic
+if not api_key:
+    st.warning("Please enter your Gemini API Key in the sidebar to proceed.")
+    st.stop()
 
-if __name__ == '__main__':
-    app.run()
+# Configure the Gemini API
+try:
+    genai.configure(api_key=api_key)
+    model = genai.GenerativeModel('gemini-pro')
+except Exception as e:
+    st.error(f"Failed to configure Gemini API: {e}")
+    st.stop()
+
+# Process files only once and store in session state
+if "processed_text" not in st.session_state:
+    st.session_state.processed_text = None
+
+if uploaded_files:
+    if st.button("Process Documents"):
+        with st.spinner("Processing documents... this may take a moment."):
+            st.session_state.processed_text = process_uploaded_files(uploaded_files)
+        st.success("Documents processed successfully! You can now ask questions.")
+
+# Initialize chat history
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+
+# Display chat messages from history
+for message in st.session_state.messages:
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])
+
+# Accept user input
+if prompt := st.chat_input("Ask a question about your documents"):
+    # Add user message to chat history
+    st.session_state.messages.append({"role": "user", "content": prompt})
+    # Display user message in chat message container
+    with st.chat_message("user"):
+        st.markdown(prompt)
+
+    # Check if files have been processed
+    if st.session_state.processed_text is None:
+        st.warning("Please upload and process documents before asking a question.")
+    else:
+        # Display assistant response in chat message container
+        with st.chat_message("assistant"):
+            with st.spinner("Thinking..."):
+                full_prompt = f"""
+                Based on the following text extracted from the user's documents, please answer their question.
+                If the answer is not found in the text, state that clearly.
+
+                ---
+                DOCUMENT TEXT:
+                {st.session_state.processed_text}
+                ---
+
+                USER'S QUESTION:
+                {prompt}
+                """
+                try:
+                    response = model.generate_content(full_prompt)
+                    response_text = response.text
+                except Exception as e:
+                    response_text = f"An error occurred: {e}"
+
+                st.markdown(response_text)
+        # Add assistant response to chat history
+        st.session_state.messages.append({"role": "assistant", "content": response_text})
