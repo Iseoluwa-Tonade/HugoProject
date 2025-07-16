@@ -4,3 +4,4 @@ PyPDF2==3.0.1
 python-pptx==0.6.21
 python-docx==0.8.11
 gunicorn
+Werkzeug==2.3.8
