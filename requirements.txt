@@ -10,3 +10,4 @@ docx2txt
 unstructured
 langchainhub
 tavily-python
+python-docx
