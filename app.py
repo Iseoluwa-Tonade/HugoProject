@@ -1,7 +1,8 @@
 import streamlit as st
-from openai import OpenAI
 import os
 import tempfile
+import io
+from docx import Document
 
 # Import LangChain components for the Agent
 from langchain_community.document_loaders import PyPDFLoader, Docx2txtLoader, UnstructuredPowerPointLoader
@@ -13,6 +14,16 @@ from langchain_community.tools.tavily_search import TavilySearchResults
 from langchain import hub
 from langchain.agents import create_openai_tools_agent, AgentExecutor
 from langchain_core.messages import HumanMessage, AIMessage
+
+# --- NEW FEATURE: Function to create a Word document in memory ---
+def create_word_document(text):
+    doc = Document()
+    doc.add_paragraph(text)
+    # Save the document to an in-memory buffer
+    buffer = io.BytesIO()
+    doc.save(buffer)
+    buffer.seek(0)
+    return buffer
 
 # --- Streamlit App UI and Logic ---
 
@@ -107,15 +118,26 @@ agent = create_openai_tools_agent(llm, tools, prompt)
 st.session_state.agent_executor = AgentExecutor(agent=agent, tools=tools, verbose=True)
 
 # --- CHAT INTERFACE ---
+# Initialize or clear chat history
+if 'chat_history' not in st.session_state:
+    st.session_state.chat_history = []
+
 # Display previous chat messages
-for message in st.session_state.chat_history:
-    # Check the type of the message to determine the role
+for i, message in enumerate(st.session_state.chat_history):
     if isinstance(message, HumanMessage):
         with st.chat_message("user"):
             st.markdown(message.content)
-    else: # Assumes the other type is AIMessage
+    else:
         with st.chat_message("assistant"):
             st.markdown(message.content)
+            # --- NEW FEATURE: Add download button for each assistant message ---
+            doc_as_bytes = create_word_document(message.content)
+            st.download_button(
+                label="Download as .docx",
+                data=doc_as_bytes,
+                file_name=f'response_{i//2 + 1}.docx',
+                mime='application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+            )
 
 # Accept user input
 if user_prompt := st.chat_input("Ask a question..."):
@@ -125,13 +147,23 @@ if user_prompt := st.chat_input("Ask a question..."):
     with st.chat_message("assistant"):
         with st.spinner("Thinking..."):
             try:
-                # Invoke the agent with the user's question and chat history
+                # Invoke the agent
                 response = st.session_state.agent_executor.invoke({
                     "chat_history": st.session_state.chat_history,
                     "input": user_prompt
                 })
                 response_text = response["output"]
                 st.markdown(response_text)
+                
+                # --- NEW FEATURE: Add download button for the new response ---
+                doc_as_bytes = create_word_document(response_text)
+                st.download_button(
+                    label="Download as .docx",
+                    data=doc_as_bytes,
+                    file_name='latest_response.docx',
+                    mime='application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+                )
+
             except Exception as e:
                 response_text = f"An error occurred: {e}"
                 st.error(response_text)
