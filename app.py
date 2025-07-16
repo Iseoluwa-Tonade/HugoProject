@@ -50,7 +50,6 @@ def process_uploaded_files(uploaded_files):
                 combined_text += extract_text_from_pptx(tmp_filepath) + "\n\n"
             elif tmp_filepath.endswith('.docx'):
                 combined_text += extract_text_from_docx(tmp_filepath) + "\n\n"
-            # Add other file types here if needed
         finally:
             os.remove(tmp_filepath) # Clean up the temporary file
 
@@ -64,13 +63,12 @@ st.title("📄 Query Your Documents")
 # Sidebar for API Key and file uploads
 with st.sidebar:
     st.header("Configuration")
-    # For local testing, users can paste their key. For deployment, use st.secrets.
     try:
-        # Try to get the key from Streamlit's secrets management
+        # Try to get the key from Streamlit's secrets management for deployment
         api_key = st.secrets["GEMINI_API_KEY"]
         st.success("API key loaded from secrets!")
     except:
-        # Fallback to a text input if secrets are not found
+        # Fallback to a text input if secrets are not found (for local testing)
         api_key = st.text_input("Enter your Gemini API Key:", type="password")
 
     uploaded_files = st.file_uploader(
@@ -87,7 +85,8 @@ if not api_key:
 # Configure the Gemini API
 try:
     genai.configure(api_key=api_key)
-    model = genai.GenerativeModel('gemini-pro')
+    # Use the latest Gemini 1.5 model
+    model = genai.GenerativeModel('gemini-1.5-pro-latest')
 except Exception as e:
     st.error(f"Failed to configure Gemini API: {e}")
     st.stop()
